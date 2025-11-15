@@ -51,7 +51,7 @@ def load_data():
             is_stationary = False
         
         # Load exogenous features
-        exog = pd.read_csv('data/exogenous_features.csv', 
+        exog = pd.read_csv('data/exogenous_features_original.csv', 
                           index_col=0, 
                           parse_dates=True)
         
@@ -77,6 +77,7 @@ def load_data():
         exog = exog.ffill()
         
         return df, exog, is_stationary
+
     except Exception as e:
         print(f"Error loading data: {e}")
         return None, None, False
@@ -108,7 +109,7 @@ def find_best_arima(train, exog=None, subset_frac=0.2):
         stepwise_fit = auto_arima(
             y,
             X=X,                   # Use numpy array instead of pandas
-            start_p=1, start_q=1,
+            start_p=0, start_q=0,
             max_p=2, max_q=2,
             start_P=0, start_Q=0,
             max_P=1, max_Q=1,
@@ -119,7 +120,7 @@ def find_best_arima(train, exog=None, subset_frac=0.2):
             suppress_warnings=True,
             stepwise=True,
             information_criterion='aic',
-            max_order=5,
+            max_order=None,
             n_jobs=1
         )
         

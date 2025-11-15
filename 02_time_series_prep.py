@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from statsmodels.tsa.stattools import adfuller, acf, pacf
 from statsmodels.tsa.seasonal import seasonal_decompose
+from sklearn.decomposition import PCA
 import os
 import sys
 import datetime
@@ -65,16 +66,69 @@ def create_exogenous_features(df):
     
     return exog
 
+def apply_pca_to_exogenous_features(exog, variance_threshold=0.90):
+    """Apply PCA to exogenous features with specified variance threshold."""
+    print(f"\nApplying PCA to exogenous features with {variance_threshold*100}% variance threshold...")
+    
+    # Note: Exogenous features are binary indicators (0/1), so no scaling needed
+    exog_array = exog.values
+    
+    # Apply PCA
+    pca = PCA()
+    pca.fit(exog_array)
+    
+    # Calculate cumulative explained variance
+    cumulative_variance = np.cumsum(pca.explained_variance_ratio_)
+    
+    # Find number of components needed for threshold
+    n_components = np.argmax(cumulative_variance >= variance_threshold) + 1
+    
+    print(f"Original features: {exog.shape[1]}")
+    print(f"Number of PCA components needed: {n_components}")
+    print(f"Variance explained by {n_components} components: {cumulative_variance[n_components-1]:.4f}")
+    
+    # Apply PCA with optimal number of components
+    pca_final = PCA(n_components=n_components)
+    exog_pca = pca_final.fit_transform(exog_array)
+    
+    # Create DataFrame with PCA components
+    pca_columns = [f'PC{i+1}' for i in range(n_components)]
+    exog_pca_df = pd.DataFrame(exog_pca, index=exog.index, columns=pca_columns)
+    
+    # Save PCA information
+    pca_info = {
+        'n_components': n_components,
+        'variance_threshold': variance_threshold,
+        'explained_variance_ratio': pca_final.explained_variance_ratio_.tolist(),
+        'cumulative_variance_ratio': cumulative_variance[:n_components].tolist(),
+        'original_features': exog.columns.tolist(),
+        'pca_components': pca_columns
+    }
+    
+    # Save PCA results and info
+    exog_pca_df.to_csv('data/exogenous_features_pca.csv')
+    pd.Series(pca_info).to_json('results/pca_info.json')
+    
+    print(f"PCA features saved to: data/exogenous_features_pca.csv")
+    print(f"PCA info saved to: results/pca_info.json")
+    
+    return exog_pca_df, pca_info
+
 def load_preprocessed_data():
-    """Load the preprocessed data and create exogenous features."""
+    """Load the preprocessed data and create PCA-transformed exogenous features."""
     try:
         # Load the main data
         df = pd.read_csv('data/PJM_Load_hourly_preprocessed.csv', index_col=0, parse_dates=True)
         
-        # Create and save exogenous features
+        # Create exogenous features
         exog = create_exogenous_features(df.copy())
-        exog.to_csv('data/exogenous_features.csv')
-        print("Saved exogenous features to data/exogenous_features.csv")
+        
+        # Apply PCA to exogenous features
+        exog_pca, pca_info = apply_pca_to_exogenous_features(exog, variance_threshold=0.80)
+        
+        # Also save original exogenous features for comparison
+        exog.to_csv('data/exogenous_features_original.csv')
+        print("Original exogenous features saved to: data/exogenous_features_original.csv")
         
         return df
     except Exception as e:
