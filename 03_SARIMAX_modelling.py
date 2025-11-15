@@ -59,10 +59,14 @@ def load_data():
         df.index = pd.to_datetime(df.index)
         exog.index = pd.to_datetime(exog.index)
         
-        # Align indices
-        df = df.reindex(exog.index)
+        # Sort both datasets
         df = df.sort_index()
-        df = df.asfreq('H')
+        exog = exog.sort_index()
+        
+        # Only keep common indices to ensure alignment
+        common_index = df.index.intersection(exog.index)
+        df = df.loc[common_index]
+        exog = exog.loc[common_index]
         
         # Ensure all data is numeric
         df = df.apply(pd.to_numeric, errors='coerce')
@@ -132,6 +136,7 @@ def train_sarimax(train, order, seasonal_order, exog=None):
     """Train SARIMAX model with given parameters and optional exogenous variables."""
     print("\nTraining SARIMAX model...")
     print(f"Using order: {order}, seasonal_order: {seasonal_order}")
+    
     if exog is not None:
         print(f"Using {exog.shape[1]} exogenous features")
     
@@ -172,7 +177,7 @@ def train_sarimax(train, order, seasonal_order, exog=None):
             print(f"Failed to fit fallback model: {e2}")
             raise
 
-def evaluate_model(model, train, test, exog_test=None, is_stationary=False):
+def evaluate_model(model_fit, train, test, exog_test=None, order=None, seasonal_order=None):
     """Evaluate the model and make predictions."""
     # Make predictions
     start = len(train)
@@ -182,12 +187,7 @@ def evaluate_model(model, train, test, exog_test=None, is_stationary=False):
     exog_forecast = exog_test.values if exog_test is not None else None
     
     # Make predictions with exogenous variables if available
-    preds = model.predict(start=start, end=end, exog=exog_forecast, dynamic=False)
-    
-    # If we differenced the data, we need to reverse it
-    if not is_stationary:
-        # This is a simplified version - you might need to adjust based on your differencing
-        preds = train.iloc[-1] + preds.cumsum()
+    preds = model_fit.predict(start=start, end=end, exog=exog_forecast, dynamic=False)
     
     # Calculate MAPE
     mape = np.mean(np.abs((test - preds) / test)) * 100
@@ -195,8 +195,8 @@ def evaluate_model(model, train, test, exog_test=None, is_stationary=False):
     # Store results
     results = {
         'mape': mape,
-        'order': model.order,
-        'seasonal_order': model.seasonal_order,
+        'order': order,
+        'seasonal_order': seasonal_order,
         'model_type': 'SARIMAX' if exog_test is not None else 'SARIMA'
     }
     
@@ -246,11 +246,12 @@ def main():
     # 2. Split data and exogenous features
     print("\n=== Splitting data ===")
     print("Splitting data into train and test sets...")
-    train, test = split_data(series)
+    test_size = 365*24  # Use the same test_size as split_data function
+    train, test = split_data(series, test_size=test_size)
     
-    # Split exogenous variables to match train/test split
-    exog_train = exog.iloc[:-len(test)]
-    exog_test = exog.iloc[-len(test):]
+    # Split exogenous variables using the same test_size to ensure alignment
+    exog_train = exog.iloc[:-test_size]
+    exog_test = exog.iloc[-test_size:]
     
     print(f"Training data: {len(train)} samples")
     print(f"Test data: {len(test)} samples")
@@ -272,7 +273,7 @@ def main():
     
     # 5. Evaluate model with exogenous variables
     print("\n=== Evaluating model ===")
-    results, preds = evaluate_model(model, train, test, exog_test=exog_test, is_stationary=is_stationary)
+    results, preds = evaluate_model(model, train, test, exog_test=exog_test, order=order, seasonal_order=seasonal_order)
     
     # 6. Plot results
     print("Generating prediction plots...")
