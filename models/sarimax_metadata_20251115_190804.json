@@ -1,0 +1,52 @@
+{
+  "model_type": "SARIMAX",
+  "order": [
+    2,
+    0,
+    0
+  ],
+  "seasonal_order": [
+    1,
+    0,
+    1,
+    24
+  ],
+  "exogenous_features": [
+    "time_night",
+    "time_morning",
+    "time_afternoon",
+    "time_evening",
+    "season_fall",
+    "season_spring",
+    "season_summer",
+    "season_winter",
+    "is_weekend"
+  ],
+  "num_exogenous_features": 9,
+  "is_stationary_data": false,
+  "model_timestamp": "20251115_190804",
+  "model_creation_date": "2025-11-15T19:08:08.102582",
+  "model_aic": 385501.52966078743,
+  "model_bic": 385614.79500838387,
+  "model_log_likelihood": -192736.76483039372,
+  "training_samples": 24136,
+  "evaluation_results": {
+    "mape": 8.73003851794534,
+    "order": [
+      2,
+      0,
+      0
+    ],
+    "seasonal_order": [
+      1,
+      0,
+      1,
+      24
+    ],
+    "model_type": "SARIMAX"
+  },
+  "software_info": {
+    "python_version": "3.8.20",
+    "statsmodels_version": "statsmodels"
+  }
+}
