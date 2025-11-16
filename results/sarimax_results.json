@@ -1,0 +1,15 @@
+{
+  "mape": 8.73003851794534,
+  "order": [
+    2,
+    0,
+    0
+  ],
+  "seasonal_order": [
+    1,
+    0,
+    1,
+    24
+  ],
+  "model_type": "SARIMAX"
+}

@@ -17,8 +17,8 @@ warnings.filterwarnings('ignore')
 
 def setup_logging():
     """Set up comprehensive logging with both file and console handlers."""
-    os.makedirs('results', exist_ok=True)
-    log_file = f'results/sarimax_modeling_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    os.makedirs('logs', exist_ok=True)
+    log_file = f'logs/sarimax_modeling_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
     
     # Create logger
     logger = logging.getLogger('sarimax_modeling')
@@ -159,10 +159,10 @@ def find_best_arima(train, exog=None, subset_frac=0.2):
         stepwise_fit = auto_arima(
             y,
             X=X,                   # Use numpy array instead of pandas
-            start_p=0, start_q=0,
-            max_p=2, max_q=2,
-            start_P=0, start_Q=0,
-            max_P=1, max_Q=1,
+            start_p=1, start_q=1,
+            max_p=3, max_q=3,
+            start_P=1, start_Q=1,
+            max_P=2, max_Q=2,
             m=24,                  # Daily seasonality for hourly data
             d=None, D=None,        # Let model decide differencing
             trace=True,
@@ -170,8 +170,7 @@ def find_best_arima(train, exog=None, subset_frac=0.2):
             suppress_warnings=True,
             stepwise=True,
             information_criterion='aic',
-            max_order=None,
-            n_jobs=1
+            max_order=None
         )
         
         logger.info("=== Best Parameters Found ===")
@@ -324,6 +323,59 @@ def plot_predictions(train, test, preds, is_stationary):
         
     except Exception as e:
         logger.error(f"Error generating prediction plot: {e}")
+        raise
+
+def plot_last_7_days(test, preds, is_stationary):
+    """Plot the last 7 days of actuals vs predictions."""
+    logger = logging.getLogger('sarimax_modeling')
+    logger.info("Generating 7-day prediction plot...")
+    
+    try:
+        # Get the last 7 days (168 hours for hourly data)
+        last_7_days = 7 * 24
+        if len(test) < last_7_days:
+            last_7_days = len(test)
+            logger.warning(f"Test data has only {len(test)} samples, plotting all available data")
+        
+        logger.debug(f"Plotting last {last_7_days} samples (7 days of hourly data)")
+        
+        # Create figure
+        plt.figure(figsize=(15, 8))
+        
+        # Slice the last 7 days
+        test_last_7 = test[-last_7_days:]
+        preds_last_7 = preds[-last_7_days:]
+        
+        # Plot actual values
+        plt.plot(test_last_7.index, test_last_7, label='Actual', color='blue', linewidth=2, alpha=0.8)
+        
+        # Plot predicted values
+        plt.plot(test_last_7.index, preds_last_7, label='Predicted', color='red', linestyle='--', linewidth=2, alpha=0.8)
+        
+        # Formatting
+        plt.title('SARIMAX Model: Last 7 Days - Actual vs Predicted', fontsize=16, fontweight='bold')
+        plt.xlabel('Date', fontsize=12)
+        plt.ylabel('Load (MW)' if not is_stationary else 'Differenced Load', fontsize=12)
+        plt.legend(fontsize=12)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        # Rotate x-axis labels for better readability
+        plt.xticks(rotation=45)
+        
+        # Save the plot
+        plot_file = 'visualizations/sarimax_last_7_days.png'
+        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"7-day prediction plot saved to: {plot_file}")
+        
+        # Calculate and log MAPE for the last 7 days
+        mape_7_days = np.mean(np.abs((test_last_7 - preds_last_7) / test_last_7)) * 100
+        logger.info(f"Last 7 days MAPE: {mape_7_days:.2f}%")
+        
+    except Exception as e:
+        logger.error(f"Error generating 7-day prediction plot: {e}")
         raise
 
 def save_model(model_fit, order, seasonal_order, exog_features=None, results=None, is_stationary=False):
@@ -497,6 +549,7 @@ def main():
         # 6. Plot results
         logger.info("=== Generating Visualizations ===")
         plot_predictions(train, test, preds, is_stationary)
+        plot_last_7_days(test, preds, is_stationary)
         
         # 7. Save results
         logger.info("=== Saving Results ===")
@@ -520,6 +573,7 @@ def main():
         logger.info(f"- Trained model: {model_file}")
         logger.info(f"- Model metadata: {metadata_file}")
         logger.info(f"- Prediction plot: visualizations/sarimax_predictions.png")
+        logger.info(f"- 7-day prediction plot: visualizations/sarimax_last_7_days.png")
         logger.info(f"- Log file: {log_file}")
         logger.info(f"Process completed at: {datetime.datetime.now()}")
         
