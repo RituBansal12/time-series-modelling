@@ -27,6 +27,7 @@ A comprehensive time series analysis and forecasting project implementing SARIMA
   - Visualization and model evaluation
   - PCA-based dimensionality reduction for exogenous features
 * **Article Link**: 
+https://medium.com/@ritu.bansalrb00/forecasting-the-future-time-series-analysis-with-sarimax-and-volatility-modeling-e0f403e97392
 
 ---
 
