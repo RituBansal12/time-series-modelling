@@ -424,12 +424,51 @@ def evaluate_sarimax_vs_sarimax_volatility(sarimax_model, arch_model, test_data,
             vol = volatility_forecast[-1] * 0.95  # Slight decay
         volatility_forecast = np.append(volatility_forecast, vol)
     
-    # Create volatility-adjusted predictions (simple approach)
-    # Adjust SARIMAX predictions based on predicted volatility
-    volatility_adjustment = np.sqrt(volatility_forecast) * 0.1  # Small adjustment factor
-    sarimax_garch_mean = sarimax_mean + np.random.normal(0, volatility_adjustment, len(sarimax_mean))
+    # Create volatility-adjusted predictions (same mean as SARIMAX, different confidence intervals)
+    # The point forecasts remain the same, only confidence intervals change
+    if isinstance(sarimax_mean, pd.Series):
+        sarimax_garch_mean = sarimax_mean.copy()
+        mean_index = sarimax_mean.index
+    else:
+        # It's a numpy array
+        sarimax_garch_mean = sarimax_mean.copy()
+        mean_index = test_data.index
     
-    # Calculate SARIMAX+GARCH metrics
+    # Calculate GARCH-adjusted confidence intervals
+    # Use the predicted volatility to adjust the confidence intervals
+    if sarimax_conf_int is not None:
+        # Handle both DataFrame and numpy array formats
+        if isinstance(sarimax_conf_int, pd.DataFrame):
+            sarimax_ci_width = sarimax_conf_int.iloc[:, 1] - sarimax_conf_int.iloc[:, 0]
+        else:
+            # It's a numpy array
+            sarimax_ci_width = sarimax_conf_int[:, 1] - sarimax_conf_int[:, 0]
+        
+        # Adjust the confidence interval width based on predicted volatility
+        # Scale factor based on the ratio of predicted volatility to historical volatility
+        historical_vol = np.std(train_residuals)
+        volatility_scale = np.sqrt(volatility_forecast) / historical_vol
+        
+        # Apply volatility scaling to confidence intervals with a minimum scale factor
+        # to ensure the confidence intervals are visible
+        min_scale = 0.5  # Minimum 50% of original CI width
+        volatility_scale = np.maximum(volatility_scale, min_scale)
+        garch_ci_width = sarimax_ci_width * volatility_scale
+        
+        # Create GARCH-adjusted confidence intervals
+        sarimax_garch_conf_int = pd.DataFrame({
+            'lower': sarimax_garch_mean - garch_ci_width / 2,
+            'upper': sarimax_garch_mean + garch_ci_width / 2
+        }, index=mean_index)
+    else:
+        # If no SARIMAX confidence intervals, create basic ones using volatility
+        garch_std = np.sqrt(volatility_forecast)
+        sarimax_garch_conf_int = pd.DataFrame({
+            'lower': sarimax_garch_mean - 1.96 * garch_std,
+            'upper': sarimax_garch_mean + 1.96 * garch_std
+        }, index=mean_index)
+    
+    # Calculate SARIMAX+GARCH metrics (same mean, so same MAPE)
     sarimax_garch_mape = mean_absolute_percentage_error(test_data, sarimax_garch_mean) * 100
     print(f"SARIMAX+GARCH MAPE: {sarimax_garch_mape:.2f}%")
     
@@ -449,7 +488,7 @@ def evaluate_sarimax_vs_sarimax_volatility(sarimax_model, arch_model, test_data,
         'sarimax_better': improvement <= 0
     }
     
-    return comparison_results, sarimax_mean, sarimax_garch_mean
+    return comparison_results, sarimax_mean, sarimax_garch_mean, sarimax_conf_int, sarimax_garch_conf_int
 
 def save_arch_model(model, p, q=0):
     """Save the trained ARCH/GARCH model."""
@@ -470,6 +509,170 @@ def save_arch_model(model, p, q=0):
     print(f"ARCH model saved successfully to: {filename}")
     
     return filename
+
+def plot_confidence_intervals_7days(test_data, sarimax_mean, sarimax_garch_mean, sarimax_conf_int, sarimax_garch_conf_int):
+    """Plot confidence intervals for the last 7 days comparing SARIMAX and SARIMAX+GARCH."""
+    print("\nGenerating 7-day confidence interval comparison...")
+    
+    # Get the last 7 days (168 hours) of data
+    last_7_days = 7 * 24  # 7 days * 24 hours
+    test_data_7d = test_data.iloc[-last_7_days:]
+    
+    # Handle both pandas Series and numpy arrays for mean predictions
+    if isinstance(sarimax_mean, pd.Series):
+        sarimax_mean_7d = sarimax_mean.iloc[-last_7_days:]
+        sarimax_mean_index = sarimax_mean_7d.index
+    else:
+        # It's a numpy array
+        sarimax_mean_7d = sarimax_mean[-last_7_days:]
+        sarimax_mean_index = test_data_7d.index
+    
+    if isinstance(sarimax_garch_mean, pd.Series):
+        sarimax_garch_mean_7d = sarimax_garch_mean.iloc[-last_7_days:]
+    else:
+        # It's a numpy array
+        sarimax_garch_mean_7d = sarimax_garch_mean[-last_7_days:]
+    
+    if sarimax_conf_int is not None:
+        sarimax_conf_int_7d = sarimax_conf_int[-last_7_days:]
+        # Convert to DataFrame if it's a numpy array
+        if isinstance(sarimax_conf_int_7d, np.ndarray):
+            sarimax_conf_int_7d = pd.DataFrame(sarimax_conf_int_7d, index=sarimax_mean_index, columns=['lower', 'upper'])
+    else:
+        sarimax_conf_int_7d = None
+    
+    if sarimax_garch_conf_int is not None:
+        sarimax_garch_conf_int_7d = sarimax_garch_conf_int[-last_7_days:]
+    else:
+        sarimax_garch_conf_int_7d = None
+    
+    # Create the plot
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
+    
+    # Plot 1: SARIMAX confidence intervals
+    ax1.plot(test_data_7d.index, test_data_7d, label='Actual', color='black', linewidth=2, alpha=0.8)
+    ax1.plot(sarimax_mean_index, sarimax_mean_7d, label='SARIMAX Forecast', color='blue', linewidth=2)
+    
+    if sarimax_conf_int_7d is not None:
+        if isinstance(sarimax_conf_int_7d, pd.DataFrame):
+            ax1.fill_between(sarimax_conf_int_7d.index, 
+                            sarimax_conf_int_7d.iloc[:, 0], 
+                            sarimax_conf_int_7d.iloc[:, 1], 
+                            color='blue', alpha=0.2, label='SARIMAX 95% CI')
+        else:
+            # It's a numpy array
+            ax1.fill_between(sarimax_mean_index, 
+                            sarimax_conf_int_7d[:, 0], 
+                            sarimax_conf_int_7d[:, 1], 
+                            color='blue', alpha=0.2, label='SARIMAX 95% CI')
+    
+    ax1.set_title('SARIMAX Forecast with Confidence Intervals (Last 7 Days)', fontsize=14, fontweight='bold')
+    ax1.set_xlabel('Date')
+    ax1.set_ylabel('Value')
+    ax1.legend(loc='upper left')
+    ax1.grid(True, alpha=0.3)
+    ax1.tick_params(axis='x', rotation=45)
+    
+    # Plot 2: SARIMAX+GARCH confidence intervals
+    ax2.plot(test_data_7d.index, test_data_7d, label='Actual', color='black', linewidth=2, alpha=0.8)
+    ax2.plot(sarimax_mean_index, sarimax_garch_mean_7d, label='SARIMAX+GARCH Forecast', color='red', linewidth=2)
+    
+    if sarimax_garch_conf_int_7d is not None:
+        if isinstance(sarimax_garch_conf_int_7d, pd.DataFrame):
+            ax2.fill_between(sarimax_garch_conf_int_7d.index, 
+                            sarimax_garch_conf_int_7d.iloc[:, 0], 
+                            sarimax_garch_conf_int_7d.iloc[:, 1], 
+                            color='red', alpha=0.5, label='SARIMAX+GARCH 95% CI')
+        else:
+            # It's a numpy array
+            ax2.fill_between(sarimax_mean_index, 
+                            sarimax_garch_conf_int_7d[:, 0], 
+                            sarimax_garch_conf_int_7d[:, 1], 
+                            color='red', alpha=0.5, label='SARIMAX+GARCH 95% CI')
+    
+    ax2.set_title('SARIMAX+GARCH Forecast with Volatility-Adjusted Confidence Intervals (Last 7 Days)', fontsize=14, fontweight='bold')
+    ax2.set_xlabel('Date')
+    ax2.set_ylabel('Value')
+    ax2.legend(loc='upper left')
+    ax2.grid(True, alpha=0.3)
+    ax2.tick_params(axis='x', rotation=45)
+    
+    plt.tight_layout()
+    plt.savefig('visualizations/confidence_intervals_7days_comparison.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Also create a combined plot showing both models side by side
+    plt.figure(figsize=(16, 8))
+    
+    # Plot actual values
+    plt.plot(test_data_7d.index, test_data_7d, label='Actual', color='black', linewidth=2, alpha=0.8)
+    
+    # Plot SARIMAX forecast and confidence intervals
+    plt.plot(sarimax_mean_index, sarimax_mean_7d, label='SARIMAX Forecast', color='blue', linewidth=2, alpha=0.8)
+    if sarimax_conf_int_7d is not None:
+        if isinstance(sarimax_conf_int_7d, pd.DataFrame):
+            plt.fill_between(sarimax_conf_int_7d.index, 
+                            sarimax_conf_int_7d.iloc[:, 0], 
+                            sarimax_conf_int_7d.iloc[:, 1], 
+                            color='blue', alpha=0.15)
+        else:
+            # It's a numpy array
+            plt.fill_between(sarimax_mean_index, 
+                            sarimax_conf_int_7d[:, 0], 
+                            sarimax_conf_int_7d[:, 1], 
+                            color='blue', alpha=0.15)
+    
+    # Plot SARIMAX+GARCH forecast and confidence intervals
+    plt.plot(sarimax_mean_index, sarimax_garch_mean_7d, label='SARIMAX+GARCH Forecast', color='red', linewidth=2, alpha=0.8)
+    if sarimax_garch_conf_int_7d is not None:
+        if isinstance(sarimax_garch_conf_int_7d, pd.DataFrame):
+            plt.fill_between(sarimax_garch_conf_int_7d.index, 
+                            sarimax_garch_conf_int_7d.iloc[:, 0], 
+                            sarimax_garch_conf_int_7d.iloc[:, 1], 
+                            color='red', alpha=0.15)
+        else:
+            # It's a numpy array
+            plt.fill_between(sarimax_mean_index, 
+                            sarimax_garch_conf_int_7d[:, 0], 
+                            sarimax_garch_conf_int_7d[:, 1], 
+                            color='red', alpha=0.15)
+    
+    plt.title('SARIMAX vs SARIMAX+GARCH: Confidence Intervals Comparison (Last 7 Days)', fontsize=16, fontweight='bold')
+    plt.xlabel('Date')
+    plt.ylabel('Value')
+    plt.legend(loc='upper left', fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.xticks(rotation=45)
+    
+    # Add text annotations to highlight the difference
+    if sarimax_conf_int_7d is not None and sarimax_garch_conf_int_7d is not None:
+        # Calculate average confidence interval widths
+        if isinstance(sarimax_conf_int_7d, pd.DataFrame):
+            sarimax_ci_width = (sarimax_conf_int_7d.iloc[:, 1] - sarimax_conf_int_7d.iloc[:, 0]).mean()
+        else:
+            # It's a numpy array
+            sarimax_ci_width = (sarimax_conf_int_7d[:, 1] - sarimax_conf_int_7d[:, 0]).mean()
+        
+        if isinstance(sarimax_garch_conf_int_7d, pd.DataFrame):
+            garch_ci_width = (sarimax_garch_conf_int_7d.iloc[:, 1] - sarimax_garch_conf_int_7d.iloc[:, 0]).mean()
+        else:
+            # It's a numpy array
+            garch_ci_width = (sarimax_garch_conf_int_7d[:, 1] - sarimax_garch_conf_int_7d[:, 0]).mean()
+        
+        plt.text(0.02, 0.98, f'Avg CI Width - SARIMAX: {sarimax_ci_width:.2f}', 
+                transform=plt.gca().transAxes, fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='blue', alpha=0.1))
+        plt.text(0.02, 0.93, f'Avg CI Width - SARIMAX+GARCH: {garch_ci_width:.2f}', 
+                transform=plt.gca().transAxes, fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='red', alpha=0.1))
+    
+    plt.tight_layout()
+    plt.savefig('visualizations/confidence_intervals_7days_combined.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("Confidence interval plots saved:")
+    print("- visualizations/confidence_intervals_7days_comparison.png")
+    print("- visualizations/confidence_intervals_7days_combined.png")
 
 def plot_comparison(test_data, sarimax_preds, sarimax_garch_preds):
     """Plot comparison between SARIMAX and SARIMAX+GARCH predictions."""
@@ -626,10 +829,13 @@ def main():
     
     # Compare performance
     print("\n=== Performance Comparison ===")
-    comparison_results, sarimax_preds, sarimax_garch_preds = evaluate_sarimax_vs_sarimax_volatility(sarimax_model, model, test, exog_test, arch_results)
+    comparison_results, sarimax_preds, sarimax_garch_preds, sarimax_conf_int, sarimax_garch_conf_int = evaluate_sarimax_vs_sarimax_volatility(sarimax_model, model, test, exog_test, arch_results)
     
     # 6. Generate comparison plot
     plot_comparison(test, sarimax_preds, sarimax_garch_preds)
+    
+    # 7. Generate confidence interval plots for last 7 days
+    plot_confidence_intervals_7days(test, sarimax_preds, sarimax_garch_preds, sarimax_conf_int, sarimax_garch_conf_int)
     
     # 7. Generate volatility plot
     conditional_vol = model.conditional_volatility
@@ -662,6 +868,8 @@ def main():
     print("\n=== Output Files ===")
     print(f"- Results: models/arch_results.json")
     print(f"- Comparison plot: visualizations/sarimax_vs_garch_comparison.png")
+    print(f"- 7-day confidence intervals: visualizations/confidence_intervals_7days_comparison.png")
+    print(f"- 7-day combined confidence intervals: visualizations/confidence_intervals_7days_combined.png")
     print(f"- Volatility plot: visualizations/arch_volatility.png")
     print(f"- Log file: {log_file}")
     print(f"- ARCH model: {arch_model_path}")

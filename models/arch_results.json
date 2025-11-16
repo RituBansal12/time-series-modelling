@@ -5,24 +5,24 @@
         "q": 1,
         "attempt": 10,
         "differenced": false,
-        "aic": 158520.14881947043,
+        "aic": 158520.14881947706,
         "has_arch_effect_after_fit": true,
         "significant_ratio": 1.0,
-        "score": 255722.01358974085
+        "score": 255722.01358975115
     },
     "fit_evaluation": {
         "arch_removed": false,
         "significant_ratio": 1.0,
         "normality_p": 0.0,
         "volatility_clustering": 0.048765329797812396,
-        "aic": 158520.14881947043,
-        "bic": 158552.51465859378
+        "aic": 158520.14881947706,
+        "bic": 158552.5146586004
     },
     "performance_comparison": {
-        "sarimax_mape": 8.73003851794534,
-        "sarimax_garch_mape": 8.730039452789297,
-        "improvement_percent": -1.070836004893557e-05,
+        "sarimax_mape": 8.730039993913133,
+        "sarimax_garch_mape": 8.730039993913133,
+        "improvement_percent": 0.0,
         "sarimax_better": true
     },
-    "timestamp": "20251116_152224"
+    "timestamp": "20251116_173638"
 }

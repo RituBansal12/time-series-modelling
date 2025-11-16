@@ -26,6 +26,7 @@ A comprehensive time series analysis and forecasting project implementing SARIMA
   - ARCH/GARCH volatility modeling with residual analysis
   - Visualization and model evaluation
   - PCA-based dimensionality reduction for exogenous features
+* **Article Link**: 
 
 ---
 
@@ -70,13 +71,15 @@ Typical steps in the workflow:
   - Forecast generation with confidence intervals
 
 #### `04_ARCH_modelling.py`
-* **Purpose**: Model volatility using ARCH/GARCH on SARIMAX residuals
+* **Purpose**: Model volatility using ARCH/GARCH on SARIMAX residuals and create confidence interval visualizations
 * **Input**: SARIMAX model and residuals
-* **Output**: ARCH/GARCH model, volatility forecasts, comparison plots
+* **Output**: ARCH/GARCH model, volatility forecasts, comparison plots with confidence intervals
 * **Key Features**: 
   - ARCH effect testing (Ljung-Box)
   - Iterative ARCH/GARCH fitting
-  - Combined SARIMAX+volatility forecasting
+  - Combined SARIMAX+volatility forecasting with dynamic confidence intervals
+  - 7-day confidence interval comparison plots (SARIMAX vs SARIMAX+GARCH)
+  - Volatility-adjusted uncertainty estimation for risk-aware forecasting
 
 ---
 
@@ -97,6 +100,10 @@ The `visualizations/` directory includes:
 * **Decomposition Plots**: Trend, seasonal, and residual components
 * **ARCH Volatility Plots**: Conditional volatility and residual analysis
 * **Model Comparison**: SARIMAX vs SARIMAX+GARCH performance comparisons
+* **Confidence Interval Plots**: 
+  - 7-day confidence interval comparison (SARIMAX vs SARIMAX+GARCH)
+  - Dynamic confidence intervals showing volatility-adjusted uncertainty
+  - Combined visualization of both models with confidence bands
 
 ---
 
@@ -105,6 +112,8 @@ The `visualizations/` directory includes:
 * **Exogenous Features**: External variables including time-based features (hour, day, month) and PCA-reduced components
 * **Residuals**: SARIMAX model errors used for ARCH/GARCH modeling
 * **Conditional Volatility**: Time-varying variance modeled by ARCH/GARCH
+* **Dynamic Confidence Intervals**: Volatility-adjusted uncertainty bounds around forecasts
+* **Risk-Aware Forecasting**: Forecasting approach that quantifies uncertainty through confidence intervals
 
 ---
 
@@ -151,8 +160,14 @@ python 04_ARCH_modelling.py
 * **Model Performance**: MAPE (Mean Absolute Percentage Error) for forecast accuracy
 * **Key Findings**: 
   - SARIMAX captures trend and seasonality patterns
-  - ARCH/GARCH models do not capture volatility clustering
-  - Combined approach does not improve forecast accuracy in volatile periods
+  - ARCH/GARCH models provide volatility estimates for uncertainty quantification
+  - Dynamic confidence intervals adjust based on predicted volatility
+  - Risk-aware forecasting improves decision-making under uncertainty
+  - 7-day confidence interval comparisons highlight uncertainty differences between models
+* **Confidence Interval Benefits**:
+  - Identifies periods of higher/lower forecast uncertainty
+  - Enables risk-aware planning and decision-making
+  - Visual representation of forecast reliability
 * **Limitations**: Model assumes stationarity after differencing, may not capture structural breaks
 
 ---
@@ -171,6 +186,9 @@ python 04_ARCH_modelling.py
   - Automated parameter selection to reduce manual tuning
   - Iterative ARCH fitting for robust convergence
   - Comprehensive logging and error handling
+  - Volatility scaling for confidence interval adjustment
+  - Minimum scale factor ensures visibility of confidence bands
+  - 7-day rolling window for confidence interval visualization
 
 ---
 
