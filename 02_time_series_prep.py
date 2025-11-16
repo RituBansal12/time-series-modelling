@@ -11,8 +11,8 @@ from datetime import datetime as dt
 
 # Set up logging
 def setup_logging():
-    os.makedirs('results', exist_ok=True)
-    log_file = f'results/time_series_prep_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    os.makedirs('logs', exist_ok=True)
+    log_file = f'logs/time_series_prep_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
     
     class Logger(object):
         def __init__(self, filename):
@@ -107,10 +107,10 @@ def apply_pca_to_exogenous_features(exog, variance_threshold=0.90):
     
     # Save PCA results and info
     exog_pca_df.to_csv('data/exogenous_features_pca.csv')
-    pd.Series(pca_info).to_json('results/pca_info.json')
+    pd.Series(pca_info).to_json('models/pca_info.json')
     
     print(f"PCA features saved to: data/exogenous_features_pca.csv")
-    print(f"PCA info saved to: results/pca_info.json")
+    print(f"PCA info saved to: models/pca_info.json")
     
     return exog_pca_df, pca_info
 

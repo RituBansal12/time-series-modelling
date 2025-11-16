@@ -390,43 +390,17 @@ def save_model(model_fit, order, seasonal_order, exog_features=None, results=Non
         logger.info(f"Model saved successfully: {model_file}")
         logger.info(f"Metadata saved successfully: {metadata_file}")
         
-        # Also save a symlink to the latest model for easy access
-        latest_model_link = os.path.join(models_dir, 'latest_sarimax_model.pkl')
-        latest_metadata_link = os.path.join(models_dir, 'latest_sarimax_metadata.json')
-        
-        try:
-            # Remove existing symlinks if they exist
-            if os.path.exists(latest_model_link):
-                os.remove(latest_model_link)
-            if os.path.exists(latest_metadata_link):
-                os.remove(latest_metadata_link)
-                
-            # Create symlinks (on Unix-like systems) or copy files (on Windows)
-            if hasattr(os, 'symlink'):
-                os.symlink(os.path.basename(model_file), latest_model_link)
-                os.symlink(os.path.basename(metadata_file), latest_metadata_link)
-                logger.debug("Created symlinks to latest model files")
-            else:
-                # On Windows, copy the files
-                import shutil
-                shutil.copy2(model_file, latest_model_link)
-                shutil.copy2(metadata_file, latest_metadata_link)
-                logger.debug("Copied latest model files")
-                
-        except Exception as e:
-            logger.warning(f"Could not create latest model links: {e}")
-        
         return model_file, metadata_file
         
     except Exception as e:
         logger.error(f"Error saving model: {e}")
         raise
 
-def load_model(model_file=None):
+def load_model(model_file):
     """Load a saved SARIMAX model and its metadata.
     
     Args:
-        model_file: Path to the model file. If None, loads the latest model.
+        model_file: Path to the model file.
     
     Returns:
         tuple: (model_fit, metadata) or (None, None) if loading fails
@@ -434,23 +408,10 @@ def load_model(model_file=None):
     logger = logging.getLogger('sarimax_modeling')
     
     try:
-        # If no model file specified, use the latest model
-        if model_file is None:
-            latest_model_link = os.path.join('models', 'latest_sarimax_model.pkl')
-            latest_metadata_link = os.path.join('models', 'latest_sarimax_metadata.json')
-            
-            if os.path.exists(latest_model_link) and os.path.exists(latest_metadata_link):
-                model_file = latest_model_link
-                metadata_file = latest_metadata_link
-                logger.info("Loading latest model...")
-            else:
-                logger.error("No model file specified and no latest model found")
-                return None, None
-        else:
-            # Derive metadata file path from model file path
-            base_name = os.path.splitext(model_file)[0]
-            metadata_file = f"{base_name.replace('_model_', '_metadata_')}.json"
-            logger.info(f"Loading model from: {model_file}")
+        # Derive metadata file path from model file path
+        base_name = os.path.splitext(model_file)[0]
+        metadata_file = f"{base_name.replace('_model_', '_metadata_')}.json"
+        logger.info(f"Loading model from: {model_file}")
         
         # Load the model
         logger.debug("Loading model object...")

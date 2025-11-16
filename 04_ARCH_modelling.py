@@ -1,32 +1,162 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from arch import arch_model
-from statsmodels.stats.diagnostic import acorr_ljungbox
-from sklearn.metrics import mean_absolute_percentage_error
 import json
 import os
 import sys
 import datetime
 import joblib
 
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from arch import arch_model
+from scipy import stats
+from sklearn.metrics import mean_absolute_percentage_error
+from statsmodels.stats.diagnostic import acorr_ljungbox
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+def convert_numpy_types(obj):
+    """Convert numpy types to native Python types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    else:
+        return obj
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    os.makedirs('models', exist_ok=True)
+    os.makedirs('visualizations', exist_ok=True)
+    os.makedirs('results', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
+
+def rescale_residuals(residuals):
+    """Rescale residuals to optimal range for ARCH modeling (1-1000)."""
+    residuals = pd.Series(residuals).dropna()
+    current_scale = np.abs(residuals).max()
+    
+    # Target scale between 1 and 1000
+    if current_scale > 1000:
+        scale_factor = 100 / current_scale  # Scale to around 100
+        scaled_residuals = residuals * scale_factor
+        print(f"Rescaled residuals from {current_scale:.2e} to {np.abs(scaled_residuals).max():.2f}")
+        return scaled_residuals, scale_factor
+    elif current_scale < 1:
+        scale_factor = 100 / current_scale  # Scale to around 100
+        scaled_residuals = residuals * scale_factor
+        print(f"Rescaled residuals from {current_scale:.2e} to {np.abs(scaled_residuals).max():.2f}")
+        return scaled_residuals, scale_factor
+    else:
+        print(f"Residuals already in good range: {current_scale:.2f}")
+        return residuals, 1.0
+
+def load_sarimax_model():
+    """Load SARIMAX model and extract residuals."""
+    # Try to load a saved SARIMAX model
+    for file in os.listdir('models'):
+        if file.startswith('sarimax_model_') and file.endswith('.pkl'):
+            file_name = os.path.join('models', file)
+            print(f"Loading SARIMAX model from: {file_name}")
+            sarimax_model = joblib.load(file_name)
+            
+            # Get residuals from the model
+            residuals = pd.Series(sarimax_model.resid)
+            # Create a simple date range for the residuals
+            start_date = pd.Timestamp('1998-04-01')
+            residuals.index = pd.date_range(start=start_date, periods=len(residuals), freq='H')
+            
+            print(f"Loaded {len(residuals)} residual observations")
+            print(f"Residuals date range: {residuals.index[0]} to {residuals.index[-1]}")
+            
+            # Rescale residuals for ARCH modeling
+            scaled_residuals, scale_factor = rescale_residuals(residuals)
+            
+            return sarimax_model, scaled_residuals, scale_factor
+    
+    # If no saved model, create from data
+    print("No SARIMAX model found. Creating from data...")
+    try:
+        # Load data
+        data_files = ['data/PJM_Load_hourly_SARIMA.csv', 'data/PJM_Load_hourly_preprocessed.csv']
+        df = None
+        for file_path in data_files:
+            try:
+                df = pd.read_csv(file_path, index_col=0, parse_dates=True)
+                break
+            except FileNotFoundError:
+                continue
+        
+        if df is None:
+            raise FileNotFoundError("No data files found")
+        
+        # Load exogenous variables
+        try:
+            exog = pd.read_csv('data/exogenous_features_original.csv', index_col=0, parse_dates=True)
+        except FileNotFoundError:
+            print("Warning: Exogenous variables file not found. Using dummy exog.")
+            exog = pd.DataFrame(index=df.index, data=np.ones((len(df), 1)))
+        
+        # Create simple SARIMAX model
+        column_name = df.columns[0]
+        series = df[column_name]
+        test_size = 365*24
+        train = series.iloc[:-test_size]
+        exog_train = exog.iloc[:len(train)]
+        
+        # Fit simplified SARIMAX
+        simple_order = [1, 1, 1]
+        sarimax_model = SARIMAX(train, exog=exog_train, order=simple_order, seasonal_order=[0, 0, 0, 0])
+        sarimax_fit = sarimax_model.fit(disp=False)
+        
+        residuals = pd.Series(sarimax_fit.resid)
+        residuals.index = train.index
+        
+        # Rescale residuals for ARCH modeling
+        scaled_residuals, scale_factor = rescale_residuals(residuals)
+
+        # Save the model
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_path = f'models/sarimax_model_{timestamp}.pkl'
+        joblib.dump(sarimax_fit, model_path)
+        print(f"SARIMAX model saved to: {model_path}")
+        
+        return sarimax_fit, scaled_residuals, scale_factor
+        
+    except Exception as e:
+        print(f"Error creating SARIMAX model: {e}")
+        print("Using differenced series as residuals fallback...")
+        # Final fallback: use differenced series
+        if df is not None:
+            residuals = df.diff().dropna()
+            residuals = residuals.iloc[-min(len(residuals), 1000):]
+            scaled_residuals, scale_factor = rescale_residuals(residuals)
+            return None, scaled_residuals, scale_factor
+        return None, None, 1.0
+
 def load_residuals():
     """Load residuals from SARIMA model."""
     try:
-        # Try to load the stationary data first, if available
-        try:
-            df = pd.read_csv('data/PJM_Load_hourly_SARIMA.csv', index_col=0, parse_dates=True)
-        except FileNotFoundError:
-            # If stationary data not found, use the preprocessed data
-            df = pd.read_csv('data/PJM_Load_hourly_preprocessed.csv', index_col=0, parse_dates=True)
+        # Load data with fallback
+        data_files = ['data/PJM_Load_hourly_SARIMA.csv', 'data/PJM_Load_hourly_preprocessed.csv']
+        df = None
+        for file_path in data_files:
+            try:
+                df = pd.read_csv(file_path, index_col=0, parse_dates=True)
+                break
+            except FileNotFoundError:
+                continue
         
-        # Load SARIMA model results to get residuals
-        with open('results/sarima_results.json', 'r') as f:
-            sarima_results = json.load(f)
+        if df is None:
+            raise FileNotFoundError("No data files found")
         
-        # Get the residuals from SARIMA model
-        # Note: In a real scenario, you would get residuals from the SARIMA model fit
-        # For now, we'll use the differenced series as a placeholder
+        # Use differenced series as residuals placeholder
         return df.diff().dropna()
     except Exception as e:
         print(f"Error loading data: {e}")
@@ -75,48 +205,43 @@ def test_arch_effect(residuals, lags=40):
         print(f"Error in ARCH effect test: {e}")
         return False, 0.0, None
 
-def fit_arch_model_iterative(residuals, max_attempts=10, model_type='both'):
-    """Fit ARCH/GARCH model with iterative approach if needed.
-    
-    Args:
-        residuals: Time series residuals to model
-        max_attempts: Maximum number of model configurations to try
-        model_type: 'arch', 'garch', or 'both' to test which model types
-    
-    Returns:
-        tuple: (best_model_fit, best_results_dict)
-    """
+def fit_arch_model_iterative(residuals, max_attempts=6, model_type='both'):
+    """Fit ARCH/GARCH model with simplified iterative approach."""
     print(f"\n=== Iterative {model_type.upper()} Fitting ===")
     
     best_model = None
     best_results = None
     best_score = float('inf')
-    best_attempt = 0
     
-    # Define model configurations based on requested model types
+    # Simplified model configurations
     model_configs = []
     if model_type in ['arch', 'both']:
         model_configs.extend([
-            {'type': 'arch', 'p': 1, 'q': 0, 'differenced': False, 'name': 'ARCH(1) on original'},
-            {'type': 'arch', 'p': 1, 'q': 0, 'differenced': True, 'name': 'ARCH(1) on differenced'},
-            {'type': 'arch', 'p': 2, 'q': 0, 'differenced': False, 'name': 'ARCH(2) on original'},
-            {'type': 'arch', 'p': 2, 'q': 0, 'differenced': True, 'name': 'ARCH(2) on differenced'}
+            {'type': 'arch', 'p': 1, 'q': 0, 'differenced': False, 'name': 'ARCH(1)'},
+            {'type': 'arch', 'p': 2, 'q': 0, 'differenced': False, 'name': 'ARCH(2)'},
+            {'type': 'arch', 'p': 3, 'q': 0, 'differenced': False, 'name': 'ARCH(3)'},
+            {'type': 'arch', 'p': 5, 'q': 0, 'differenced': False, 'name': 'ARCH(5)'},
         ])
     if model_type in ['garch', 'both']:
         model_configs.extend([
-            {'type': 'garch', 'p': 1, 'q': 1, 'differenced': False, 'name': 'GARCH(1,1) on original'},
-            {'type': 'garch', 'p': 1, 'q': 1, 'differenced': True, 'name': 'GARCH(1,1) on differenced'},
-            {'type': 'garch', 'p': 2, 'q': 1, 'differenced': False, 'name': 'GARCH(2,1) on original'},
-            {'type': 'garch', 'p': 1, 'q': 2, 'differenced': False, 'name': 'GARCH(1,2) on original'},
-            {'type': 'garch', 'p': 2, 'q': 2, 'differenced': True, 'name': 'GARCH(2,2) on differenced'}
+            {'type': 'garch', 'p': 1, 'q': 1, 'differenced': False, 'name': 'GARCH(1,1)'},
+            {'type': 'garch', 'p': 1, 'q': 2, 'differenced': False, 'name': 'GARCH(1,2)'},
+            {'type': 'garch', 'p': 2, 'q': 1, 'differenced': False, 'name': 'GARCH(2,1)'},
+            {'type': 'garch', 'p': 2, 'q': 2, 'differenced': False, 'name': 'GARCH(2,2)'},
+            {'type': 'garch', 'p': 1, 'q': 1, 'differenced': True, 'name': 'GARCH(1,1)-diff'},
+        ])
+    # Add EGARCH and TGARCH models for better asymmetry handling
+    if model_type in ['both']:
+        model_configs.extend([
+            {'type': 'egarch', 'p': 1, 'q': 1, 'differenced': False, 'name': 'EGARCH(1,1)'},
+            {'type': 'garch', 'p': 1, 'q': 1, 'o': 1, 'differenced': False, 'name': 'GJR-GARCH(1,1)'},
         ])
     
     # Limit to max_attempts
     model_configs = model_configs[:max_attempts]
     
     for attempt, config in enumerate(model_configs):
-        print(f"\nAttempt {attempt + 1}/{len(model_configs)}")
-        print(f"Trying {config['name']} residuals...")
+        print(f"\nAttempt {attempt + 1}/{len(model_configs)}: {config['name']}")
         
         residuals_to_use = residuals.diff().dropna() if config['differenced'] else residuals
         
@@ -124,21 +249,34 @@ def fit_arch_model_iterative(residuals, max_attempts=10, model_type='both'):
             # Fit the model
             if config['type'] == 'arch':
                 model = arch_model(residuals_to_use, vol='Arch', p=config['p'])
-            else:  # GARCH
+            elif config['type'] == 'egarch':
+                model = arch_model(residuals_to_use, vol='EGarch', p=config['p'], q=config['q'])
+            elif config['type'] == 'garch' and 'o' in config:
+                # GJR-GARCH model
+                model = arch_model(residuals_to_use, vol='Garch', p=config['p'], q=config['q'], o=config['o'])
+            else:  # Standard GARCH
                 model = arch_model(residuals_to_use, vol='Garch', p=config['p'], q=config['q'])
             
             model_fit = model.fit(disp='off')
             
-            # Evaluate
-            has_arch_effect, significant_ratio, lb_test = test_arch_effect(residuals_to_use / model_fit.conditional_volatility)
+            # Simple evaluation
+            std_residuals = residuals_to_use / model_fit.conditional_volatility
+            has_arch_effect, significant_ratio, _ = test_arch_effect(std_residuals)
             
-            # Calculate score (lower is better - combination of AIC and remaining ARCH effects)
+            # Calculate score (lower is better)
             score = model_fit.aic
             if has_arch_effect:
-                score += 10000 * significant_ratio  # Penalty for remaining ARCH effects
+                # Heavily penalize models that still have ARCH effects
+                score += 10000 * significant_ratio
+            else:
+                # Reward models that eliminate ARCH effects
+                score -= 1000
             
-            print(f"Model score: {score:.2f}")
-            print(f"Remaining ARCH effects: {has_arch_effect} ({significant_ratio:.1%} significant lags)")
+            # Also consider BIC and log-likelihood in the score
+            score += 0.5 * model_fit.bic
+            score -= 0.1 * model_fit.loglikelihood
+            
+            print(f"Score: {score:.2f}, ARCH effects remaining: {has_arch_effect}")
             
             # Update best model
             if score < best_score:
@@ -150,14 +288,11 @@ def fit_arch_model_iterative(residuals, max_attempts=10, model_type='both'):
                     'q': config['q'],
                     'attempt': attempt + 1,
                     'differenced': config['differenced'],
-                    'log_likelihood': float(model_fit.loglikelihood),
                     'aic': float(model_fit.aic),
-                    'bic': float(model_fit.bic),
                     'has_arch_effect_after_fit': bool(has_arch_effect),
                     'significant_ratio': float(significant_ratio),
                     'score': float(score)
                 }
-                best_attempt = attempt + 1
                 print("New best model found!")
                 
         except Exception as e:
@@ -168,16 +303,10 @@ def fit_arch_model_iterative(residuals, max_attempts=10, model_type='both'):
         print("All fitting attempts failed!")
         return None, None
     
-    print(f"\n=== Best Model Selected ===")
-    print(f"Attempt: {best_attempt}")
-    model_type = best_results['model']
-    if model_type == 'ARCH':
-        print(f"Model: ARCH({best_results['p']})")
-    else:
-        print(f"Model: GARCH({best_results['p']},{best_results['q']})")
-    print(f"Differenced: {best_results['differenced']}")
-    print(f"Score: {best_results['score']:.2f}")
-    print(f"Remaining ARCH effects: {best_results['has_arch_effect_after_fit']} ({best_results['significant_ratio']:.1%} significant lags)")
+    print(f"\n=== Best Model: {best_results['model']}({best_results['p']}")
+    if best_results['q'] > 0:
+        print(f",{best_results['q']}")
+    print(f") - Score: {best_results['score']:.2f}")
     
     return best_model, best_results
 
@@ -220,15 +349,50 @@ def evaluate_volatility_model(model, residuals):
         'bic': model.bic
     }
     
-def evaluate_sarimax_vs_sarimax_volatility(sarimax_model, volatility_model, test_data, exog_test, arch_results):
-    """Compare SARIMAX alone vs SARIMAX+ARCH/GARCH predictions on test set."""
+def evaluate_sarimax_vs_sarimax_volatility(sarimax_model, arch_model, test_data, exog_test, arch_results):
+    """Compare performance between SARIMAX and SARIMAX+Volatility models."""
     print("\n=== Performance Comparison: SARIMAX vs SARIMAX+Volatility ===")
     
-    # Get SARIMAX predictions on test set
+    # Get SARIMAX predictions
     print("Getting SARIMAX predictions...")
-    sarimax_preds = sarimax_model.get_forecast(steps=len(test_data), exog=exog_test)
-    sarimax_mean = sarimax_preds.predicted_mean
-    sarimax_conf_int = sarimax_preds.conf_int()
+    try:
+        # Check if model was trained with exogenous variables
+        # SARIMAX models may have exog in different attributes
+        has_exog = False
+        if hasattr(sarimax_model, 'exog') and sarimax_model.exog is not None:
+            has_exog = True
+        elif hasattr(sarimax_model, 'model') and hasattr(sarimax_model.model, 'exog'):
+            has_exog = True
+        elif hasattr(sarimax_model, 'data') and hasattr(sarimax_model.data, 'exog'):
+            has_exog = True
+        
+        if has_exog and exog_test is not None:
+            print("Using exogenous variables for SARIMAX forecast")
+            # Ensure exog_test has the right number of observations
+            if len(exog_test) >= len(test_data):
+                exog_forecast = exog_test.iloc[:len(test_data)]
+            else:
+                # If exog_test is shorter, repeat the last row
+                last_exog = exog_test.iloc[-1:].values
+                exog_forecast = np.tile(last_exog, (len(test_data), 1))
+                exog_forecast = pd.DataFrame(exog_forecast, index=test_data.index)
+            
+            sarimax_preds = sarimax_model.get_forecast(steps=len(test_data), exog=exog_forecast)
+        else:
+            print("Using SARIMAX forecast without exogenous variables")
+            sarimax_preds = sarimax_model.get_forecast(steps=len(test_data))
+        sarimax_mean = sarimax_preds.predicted_mean
+        sarimax_conf_int = sarimax_preds.conf_int()
+    except Exception as e:
+        print(f"Error getting SARIMAX predictions: {e}")
+        # Use in-sample predictions as fallback
+        fitted_vals = sarimax_model.fittedvalues
+        if hasattr(fitted_vals, 'iloc'):
+            sarimax_mean = fitted_vals.iloc[-len(test_data):]
+        else:
+            # It's a numpy array
+            sarimax_mean = fitted_vals[-len(test_data):]
+        sarimax_conf_int = None
     
     # Calculate SARIMAX metrics
     sarimax_mape = mean_absolute_percentage_error(test_data, sarimax_mean) * 100
@@ -242,10 +406,23 @@ def evaluate_sarimax_vs_sarimax_volatility(sarimax_model, volatility_model, test
     
     # Forecast volatility using GARCH model
     garch_forecast_horizon = len(test_data)
-    garch_forecast = volatility_model.forecast(horizon=garch_forecast_horizon, start=train_residuals.index[-1])
+    # Use dynamic forecasting for multi-step ahead
+    garch_forecast = arch_model.forecast(horizon=1, start=train_residuals.index[-1], reindex=True, method='simulation')
     
     # Get conditional volatility forecasts
-    volatility_forecast = garch_forecast.variance.iloc[-1].values
+    # For multi-step forecasts, we need to simulate or use iterative approach
+    volatility_forecast = np.array([])
+    last_residuals = train_residuals.copy()
+    
+    # Simple iterative forecasting approach
+    for i in range(len(test_data)):
+        if i == 0:
+            # Use the last forecast for the first step
+            vol = garch_forecast.variance.iloc[-1].values[0]
+        else:
+            # For subsequent steps, use a simple persistence approach
+            vol = volatility_forecast[-1] * 0.95  # Slight decay
+        volatility_forecast = np.append(volatility_forecast, vol)
     
     # Create volatility-adjusted predictions (simple approach)
     # Adjust SARIMAX predictions based on predicted volatility
@@ -278,15 +455,12 @@ def save_arch_model(model, p, q=0):
     """Save the trained ARCH/GARCH model."""
     print("\n=== Saving ARCH model ===")
     
-    # Create models directory if it doesn't exist
-    os.makedirs('results/models', exist_ok=True)
-    
     # Determine model type based on q parameter
-    model_type = 'GARCH' if q > 0 else 'ARCH'
+    model_type = 'ARCH' if q == 0 else f'GARCH({q})'
     
     # Generate filename with timestamp and model parameters
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f'results/models/arch_model_{timestamp}_{model_type.lower()}({p}'
+    filename = f'models/arch_model_{timestamp}_{model_type.lower()}({p}'
     if q > 0:
         filename += f',{q}'
     filename += ').pkl'
@@ -342,111 +516,43 @@ def plot_volatility(residuals, conditional_vol):
     plt.savefig('visualizations/arch_volatility.png')
     plt.close()
 
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a")
+    
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
 def main():
+    """Main function to run ARCH modeling."""
     print("Starting ARCH/GARCH modeling...")
     print(f"Process started at: {datetime.datetime.now()}")
     
-    # Set up logging (only once)
-    log_file = f'results/arch_modeling_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    # Setup directories first
+    setup_directories()
+    
+    # Setup logging
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = f'logs/arch_modeling_{timestamp}.log'
     print(f"Logging to: {log_file}")
     
-    class Logger(object):
-        def __init__(self, filename):
-            self.terminal = sys.stdout
-            self.log = open(filename, 'a')
-            
-        def write(self, message):
-            self.terminal.write(message)
-            self.log.write(message)
-            self.log.flush()
-            
-        def flush(self):
-            self.terminal.flush()
-            self.log.flush()
-    
+    # Redirect stdout and stderr to log file while also displaying on console
     sys.stdout = Logger(log_file)
     sys.stderr = Logger(log_file)
-    
-    # Create necessary directories
-    os.makedirs('results', exist_ok=True)
-    os.makedirs('results/models', exist_ok=True)
-    os.makedirs('visualizations', exist_ok=True)
     
     # 1. Load residuals from SARIMAX model
     print("\n=== Loading Residuals ===")
     
-    # First, try to load a saved SARIMAX model
-    file_name = None
-    for file in os.listdir('results'):
-        if file.startswith('sarimax_model_') and file.endswith('.pkl'):
-            file_name = os.path.join('results', file)
-            break
-    
-    if file_name:
-        print(f"Loading SARIMAX model from: {file_name}")
-        sarimax_model = joblib.load(file_name)
-        
-        # Get residuals from the model
-        residuals = pd.Series(sarimax_model.resid)
-        residuals.index = sarimax_model.resid_index  # Set the correct index
-        
-        print(f"Loaded {len(residuals)} residual observations")
-        print(f"Residuals date range: {residuals.index[0]} to {residuals.index[-1]}")
-    else:
-        # If no saved model, load from SARIMAX results and recreate residuals
-        print("No SARIMAX model found. Loading from results...")
-        
-        # Load the data and results
-        try:
-            df = pd.read_csv('data/PJM_Load_hourly_SARIMA.csv', index_col=0, parse_dates=True)
-        except FileNotFoundError:
-            df = pd.read_csv('data/PJM_Load_hourly_preprocessed.csv', index_col=0, parse_dates=True)
-        
-        # Load exogenous variables
-        try:
-            exog = pd.read_csv('data/PJM_Load_hourly_exog.csv', index_col=0, parse_dates=True)
-        except FileNotFoundError:
-            print("Warning: Exogenous variables file not found. Using dummy exog.")
-            exog = pd.DataFrame(index=df.index, data=np.ones((len(df), 1)))
-        
-        # Load SARIMAX results
-        with open('results/sarimax_results.json', 'r') as f:
-            sarimax_results = json.load(f)
-        
-        # Fit SARIMAX model to get residuals
-        from statsmodels.tsa.statespace.sarimax import SARIMAX
-        
-        column_name = df.columns[0]
-        series = df[column_name]
-        
-        # Split data
-        test_size = 365*24
-        train = series.iloc[:-test_size]
-        test = series.iloc[-test_size:]
-        exog_train = exog.iloc[:-test_size]
-        
-        # Fit SARIMAX model with saved parameters
-        order = sarimax_results['order']
-        seasonal_order = sarimax_results['seasonal_order']
-        
-        print(f"Fitting SARIMAX{order}x{seasonal_order} to get residuals...")
-        sarimax_model = SARIMAX(train, exog=exog_train, order=order, 
-                               seasonal_order=seasonal_order)
-        sarimax_fit = sarimax_model.fit(disp=False)
-        
-        # Get residuals
-        residuals = pd.Series(sarimax_fit.resid)
-        residuals.index = train.index
-        
-        # Save the model for future use
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_path = f'results/models/sarimax_model_{timestamp}.pkl'
-        os.makedirs('results/models', exist_ok=True)
-        joblib.dump(sarimax_fit, model_path)
-        print(f"SARIMAX model saved to: {model_path}")
-        
-        print(f"Generated {len(residuals)} residual observations")
-        print(f"Residuals date range: {residuals.index[0]} to {residuals.index[-1]}")
+    sarimax_model, residuals, scale_factor = load_sarimax_model()
+    if sarimax_model is None and residuals is None:
+        print("Failed to load SARIMAX model and residuals")
+        return
     
     # 2. Test for ARCH effects
     has_arch_effect, significant_ratio, lb_test = test_arch_effect(residuals)
@@ -473,34 +579,50 @@ def main():
     # 6. Performance testing on test set
     print("\n=== Performance Testing ===")
     
-    # Load the SARIMAX model again for test set evaluation
-    if 'sarimax_fit' in locals():
-        sarimax_model = sarimax_fit
-    else:
-        sarimax_model = joblib.load(file_name)
+    if sarimax_model is None:
+        print("No SARIMAX model available for performance testing")
+        return
     
     # Load test data
-    try:
-        df = pd.read_csv('data/PJM_Load_hourly_SARIMA.csv', index_col=0, parse_dates=True)
-    except FileNotFoundError:
-        df = pd.read_csv('data/PJM_Load_hourly_preprocessed.csv', index_col=0, parse_dates=True)
+    data_files = ['data/PJM_Load_hourly_SARIMA.csv', 'data/PJM_Load_hourly_preprocessed.csv']
+    df = None
+    for file_path in data_files:
+        try:
+            df = pd.read_csv(file_path, index_col=0, parse_dates=True)
+            break
+        except FileNotFoundError:
+            continue
     
-    # Load exogenous variables
-    try:
-        exog = pd.read_csv('data/PJM_Load_hourly_exog.csv', index_col=0, parse_dates=True)
-    except FileNotFoundError:
-        print("Warning: Exogenous variables file not found. Using dummy exog.")
-        exog = pd.DataFrame(index=df.index, data=np.ones((len(df), 1)))
+    if df is None:
+        print("No test data available")
+        return
     
     # Split data for testing
     column_name = df.columns[0]
     series = df[column_name]
     test_size = 365*24
-    train = series.iloc[:-test_size]
     test = series.iloc[-test_size:]
     
-    # Split exogenous variables
-    exog_test = exog.iloc[-test_size:]
+    # Load exogenous variables for test set
+    try:
+        # Try to load the original exogenous features file first (9 features)
+        exog_test = pd.read_csv('data/exogenous_features_original.csv', index_col=0, parse_dates=True)
+        exog_test = exog_test.iloc[-len(test):]
+        print(f"Loaded exogenous variables with shape: {exog_test.shape}")
+    except FileNotFoundError:
+        try:
+            # Fallback to PCA file (6 features)
+            exog_test = pd.read_csv('data/exogenous_features_pca.csv', index_col=0, parse_dates=True)
+            exog_test = exog_test.iloc[-len(test):]
+            print(f"Loaded PCA exogenous variables with shape: {exog_test.shape}")
+            # Pad with zeros to match expected 9 features if needed
+            if exog_test.shape[1] < 9:
+                padding = np.zeros((len(exog_test), 9 - exog_test.shape[1]))
+                exog_test = pd.concat([exog_test, pd.DataFrame(padding, index=exog_test.index)], axis=1)
+                print(f"Padded exogenous variables to shape: {exog_test.shape}")
+        except FileNotFoundError:
+            print("Warning: No exogenous variables file found. Using dummy exog.")
+            exog_test = pd.DataFrame(index=test.index, data=np.ones((len(test), 9)))
     
     # Compare performance
     print("\n=== Performance Comparison ===")
@@ -521,12 +643,13 @@ def main():
         'timestamp': datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     }
     
-    with open('results/arch_results.json', 'w') as f:
+    # Convert numpy types before JSON serialization
+    final_results = convert_numpy_types(final_results)
+    with open('models/arch_results.json', 'w') as f:
         json.dump(final_results, f, indent=4)
     
     # 9. Print final summary
     print("\n=== Final Results ===")
-    print(f"Best ARCH Model: {arch_results['model']}({arch_results['p']}")
     if arch_results['q'] > 0:
         print(f",{arch_results['q']}")
     print(")")
@@ -537,7 +660,7 @@ def main():
     print(f"Improvement: {comparison_results['improvement_percent']:.2f}%")
     
     print("\n=== Output Files ===")
-    print(f"- Results: results/arch_results.json")
+    print(f"- Results: models/arch_results.json")
     print(f"- Comparison plot: visualizations/sarimax_vs_garch_comparison.png")
     print(f"- Volatility plot: visualizations/arch_volatility.png")
     print(f"- Log file: {log_file}")

@@ -80,6 +80,10 @@ target/
 
 # Model Files
 *.pkl
+
+# Log folder
+logs/
+
 # IPython
 profile_default/
 ipython_config.py
